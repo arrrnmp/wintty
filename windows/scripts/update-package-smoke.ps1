@@ -127,6 +127,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'pack A failed' }
     $setup = @(Get-ChildItem -LiteralPath $releases -Filter '*-Setup.exe' -File)
     if ($setup.Count -ne 1) { throw "Expected one Setup after pack A, found $($setup.Count)." }
+    Write-Host "setup for A: $([IO.Path]::GetFileName($setup[0].FullName))"
 
     # A marker outside the install root: install/apply must leave it alone.
     $marker = Join-Path $outside 'settings-marker.txt'
@@ -138,12 +139,15 @@ try {
     # prevent-launch flag: the app must not start after install.
     $marked = Join-Path $work 'Setup.marked.exe'
     Copy-Item -LiteralPath $setup[0].FullName -Destination $marked
+    Write-Host "setup copy ready: $marked"
     $motw = $false
     try {
         Set-Content -LiteralPath $marked -Stream 'Zone.Identifier' -Value "[ZoneTransfer]`nZoneId=3" -ErrorAction Stop
         $motw = $true
     } catch { Write-Host 'note: ADS unavailable, skipping MOTW simulation' }
+    Write-Host 'probing for staged processes before install...'
     Assert-NoStagedProcess $installA 'refusing to install over a running staged app'
+    Write-Host 'no staged processes; starting silent install...'
     # Start-Process -Wait, not the call operator: Setup.exe is a GUI
     # binary (it can show a splash), and & returns as soon as a GUI
     # process starts instead of when it finishes. Waiting on the call
