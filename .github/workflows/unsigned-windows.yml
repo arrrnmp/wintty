@@ -203,7 +203,11 @@ jobs:
             -Version $env:UPDATE_VERSION
 
       # Headless install A then real Update.exe apply of B, no GUI or GPU.
+      # Bounded: every external process in the script already carries its
+      # own timeout, and this caps the whole phase so a wedged apply can
+      # never burn the job budget again.
       - name: Headless install/apply smoke (A->B)
+        timeout-minutes: 25
         run: |
           windows/scripts/update-package-smoke.ps1 `
             -PublishDir artifacts/wintty-unsigned-win-x64 `

@@ -183,8 +183,23 @@ try {
     Assert-NoStagedProcess $installA 'refusing to apply over a running staged app'
     $updateExe = Join-Path $installA 'Update.exe'
     if (-not (Test-Path -LiteralPath $updateExe -PathType Leaf)) { throw "Missing installed updater: $updateExe" }
-    & $updateExe apply --norestart --package $packageB
-    if ($LASTEXITCODE -ne 0) { throw "Update.exe apply failed exit=$LASTEXITCODE" }
+    # Start-Process with a hard timeout, not the call operator: an apply
+    # that prompts (or otherwise blocks) on a headless runner must fail
+    # loudly instead of wedging the step until the job timeout. --silent
+    # keeps dialogs off here; the smoke proves extract/swap/verify
+    # mechanics, not progress UI (the product handoff is the non-silent
+    # one, on interactive machines).
+    $p = Start-Process -FilePath $updateExe `
+        -ArgumentList @('apply', '--silent', '--norestart', '--package', $packageB) `
+        -PassThru -WindowStyle Hidden
+    if (-not $p.WaitForExit(300000)) {
+        try { Stop-Process -InputObject $p -Force } catch { }
+        Write-Host '--- install tree on apply timeout ---'
+        Get-ChildItem -LiteralPath $installA -Recurse -File -ErrorAction SilentlyContinue |
+            Select-Object -First 20 FullName | ForEach-Object { Write-Host $_.FullName }
+        throw "Update.exe apply timed out after 300s (killed pid $($p.Id))"
+    }
+    if ($p.ExitCode -ne 0) { throw "Update.exe apply failed exit=$($p.ExitCode)" }
     Assert-NoStagedProcess $installA 'apply restarted the app despite --norestart'
 
     # Phase 5: B is live, whole, and still unmarked; outside settings intact.
