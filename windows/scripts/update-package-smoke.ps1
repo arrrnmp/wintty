@@ -144,8 +144,25 @@ try {
         $motw = $true
     } catch { Write-Host 'note: ADS unavailable, skipping MOTW simulation' }
     Assert-NoStagedProcess $installA 'refusing to install over a running staged app'
-    & $marked --silent --installto $installA
-    if ($LASTEXITCODE -ne 0) { throw "silent install failed exit=$LASTEXITCODE" }
+    # Start-Process -Wait, not the call operator: Setup.exe is a GUI
+    # binary (it can show a splash), and & returns as soon as a GUI
+    # process starts instead of when it finishes. Waiting on the call
+    # operator would race the background install and assert on a
+    # half-written tree.
+    $p = Start-Process -FilePath $marked -ArgumentList @('--silent', '--installto', $installA) `
+        -PassThru -WindowStyle Hidden
+    if (-not $p.WaitForExit(300000)) {
+        try { Stop-Process -InputObject $p -Force } catch { }
+        throw "silent install timed out after 300s (killed pid $($p.Id))"
+    }
+    if ($p.ExitCode -ne 0) { throw "silent install failed exit=$($p.ExitCode)" }
+    # The exit above means Setup is done, but settle anyway: a slow disk
+    # must never turn into a missing-tree failure here.
+    $deadline = (Get-Date).AddSeconds(180)
+    while (-not (Test-Path -LiteralPath (Join-Path $installA 'current\sq.version') -PathType Leaf)) {
+        if ((Get-Date) -gt $deadline) { throw 'install tree never materialized current\sq.version' }
+        Start-Sleep -Milliseconds 500
+    }
     Assert-NoStagedProcess $installA 'install launched the app despite --silent'
 
     # Phase 3: installed A is complete and unmarked.
