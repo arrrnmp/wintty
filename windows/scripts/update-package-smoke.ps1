@@ -64,7 +64,7 @@ try {
             try { $p = $_.Path } catch { $p = $null }
             if ($p -and (($p + '\') -like ((Resolve-Path -LiteralPath $root).Path.TrimEnd('\') + '\*'))) { $_ }
         })
-        if ($hits.Count -gt 0) { throw "$why: pid(s) $(($hits | ForEach-Object Id) -join ', ') still running from $root" }
+        if ($hits.Count -gt 0) { throw "${why}: pid(s) $(($hits | ForEach-Object Id) -join ', ') still running from $root" }
     }
 
     function Invoke-HookProbe([string]$hook, [string]$version) {
@@ -88,21 +88,15 @@ try {
     Invoke-HookProbe '--veloapp-obsolete' $VersionA
     Invoke-HookProbe '--veloapp-updated' $VersionB
 
-    # Phase 1: same payload, two Velopack semvers; B lands beside A so pack
-    # emits the A->B delta and a merged feed, like a real patch release.
+    # Phase 1: pack version A first and install from exactly that Setup:
+    # the Setup file name carries no version, so packing B afterwards
+    # would overwrite it (same payload, but embedding B). A must be
+    # installed and proven before B lands beside it for the delta.
     & $packScript -PublishDir $PublishDir -OutputDir $releases -Version $VersionA `
         -PackId $PackId -PackTitle $PackTitle -Channel $Channel -MainExe $MainExe
     if ($LASTEXITCODE -ne 0) { throw 'pack A failed' }
-    & $packScript -PublishDir $PublishDir -OutputDir $releases -Version $VersionB `
-        -PackId $PackId -PackTitle $PackTitle -Channel $Channel -MainExe $MainExe
-    if ($LASTEXITCODE -ne 0) { throw 'pack B failed' }
-    $setup = @(Get-ChildItem -LiteralPath $releases -Filter '*-Setup.exe' -File)[0].FullName
-    # Feed-resolved, never hardcoded: vpk infixes the channel in package names.
-    $feedB = Get-Content -LiteralPath (Join-Path $releases "releases.$Channel.json") -Raw | ConvertFrom-Json
-    $fullB = @($feedB.Assets | Where-Object { $_.Type -eq 'Full' -and $_.Version -eq $VersionB })
-    if ($fullB.Count -ne 1) { throw "Expected one Full asset for $VersionB, found $($fullB.Count)." }
-    $packageB = Join-Path $releases $fullB[0].FileName
-    if (-not (Test-Path -LiteralPath $packageB -PathType Leaf)) { throw "Missing B package: $packageB" }
+    $setup = @(Get-ChildItem -LiteralPath $releases -Filter '*-Setup.exe' -File)
+    if ($setup.Count -ne 1) { throw "Expected one Setup after pack A, found $($setup.Count)." }
 
     # A marker outside the install root: install/apply must leave it alone.
     $marker = Join-Path $outside 'settings-marker.txt'
@@ -113,7 +107,7 @@ try {
     # allows it, then install silently from it. --silent is the documented
     # prevent-launch flag: the app must not start after install.
     $marked = Join-Path $work 'Setup.marked.exe'
-    Copy-Item -LiteralPath $setup -Destination $marked
+    Copy-Item -LiteralPath $setup[0].FullName -Destination $marked
     $motw = $false
     try {
         Set-Content -LiteralPath $marked -Stream 'Zone.Identifier' -Value "[ZoneTransfer]`nZoneId=3" -ErrorAction Stop
@@ -124,7 +118,35 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "silent install failed exit=$LASTEXITCODE" }
     Assert-NoStagedProcess $installA 'install launched the app despite --silent'
 
-    function Assert-InstalledVersion([string]$root, [string]$want, [string]$hash) {
+    # Phase 3: installed A is complete and unmarked.
+    Assert-InstalledVersion $installA $VersionA $markerHash
+
+    # Phase 4: pack B beside A so the pack emits the A->B delta and a
+    # merged feed, like a real patch release; then apply B onto installed
+    # A with the real installed Update.exe, no restart, no instances.
+    & $packScript -PublishDir $PublishDir -OutputDir $releases -Version $VersionB `
+        -PackId $PackId -PackTitle $PackTitle -Channel $Channel -MainExe $MainExe
+    if ($LASTEXITCODE -ne 0) { throw 'pack B failed' }
+    # Feed-resolved, never hardcoded: vpk infixes the channel in package names.
+    $feedB = Get-Content -LiteralPath (Join-Path $releases "releases.$Channel.json") -Raw | ConvertFrom-Json
+    $fullB = @($feedB.Assets | Where-Object { $_.Type -eq 'Full' -and $_.Version -eq $VersionB })
+    if ($fullB.Count -ne 1) { throw "Expected one Full asset for $VersionB, found $($fullB.Count)." }
+    $packageB = Join-Path $releases $fullB[0].FileName
+    if (-not (Test-Path -LiteralPath $packageB -PathType Leaf)) { throw "Missing B package: $packageB" }
+    Assert-NoStagedProcess $installA 'refusing to apply over a running staged app'
+    $updateExe = Join-Path $installA 'Update.exe'
+    if (-not (Test-Path -LiteralPath $updateExe -PathType Leaf)) { throw "Missing installed updater: $updateExe" }
+    & $updateExe apply --norestart --package $packageB
+    if ($LASTEXITCODE -ne 0) { throw "Update.exe apply failed exit=$LASTEXITCODE" }
+    Assert-NoStagedProcess $installA 'apply restarted the app despite --norestart'
+
+    # Phase 5: B is live, whole, and still unmarked; outside settings intact.
+    Assert-InstalledVersion $installA $VersionB $markerHash
+
+    Write-Host "smoke ok: install $VersionA -> apply $VersionB, hooks fast, no GUI, marker untouched"
+}
+
+function Assert-InstalledVersion([string]$root, [string]$want, [string]$hash) {
         $current = Join-Path $root 'current'
         # sq.version is the package manifest (nuspec XML), not a bare version
         # string: the installed version is its <version> element.
@@ -153,23 +175,6 @@ try {
         }
         Write-Host "install tree ok: version=$want ghostty.ps1 loads, marker untouched"
     }
-
-    # Phase 3: installed A is complete and unmarked.
-    Assert-InstalledVersion $installA $VersionA $markerHash
-
-    # Phase 4: real apply of B onto installed A, no restart, no instances.
-    Assert-NoStagedProcess $installA 'refusing to apply over a running staged app'
-    $updateExe = Join-Path $installA 'Update.exe'
-    if (-not (Test-Path -LiteralPath $updateExe -PathType Leaf)) { throw "Missing installed updater: $updateExe" }
-    & $updateExe apply --norestart --package $packageB
-    if ($LASTEXITCODE -ne 0) { throw "Update.exe apply failed exit=$LASTEXITCODE" }
-    Assert-NoStagedProcess $installA 'apply restarted the app despite --norestart'
-
-    # Phase 5: B is live, whole, and still unmarked; outside settings intact.
-    Assert-InstalledVersion $installA $VersionB $markerHash
-
-    Write-Host "smoke ok: install $VersionA -> apply $VersionB, hooks fast, no GUI, marker untouched"
-}
 finally {
     # Only what this run staged: uninstall our temp install (drops its own
     # shortcuts), then remove the GUID workdir. Nothing else is touched.
