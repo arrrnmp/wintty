@@ -9,7 +9,7 @@ distribution and is not signed by its publisher.
 Two flavors come out of every successful **build** job:
 
 - **Installer + auto-updates (recommended).** Run
-  `arrrnmp.wintty.oss-Setup.exe` for a per-user install that checks the
+  `arrrnmp.wintty.oss-stable-Setup.exe` for a per-user install that checks the
   stable GitHub Releases feed and updates itself in place. Tagged releases
   (`oss-vX.Y.Z`, see below) carry the installer durably on the release
   page; untagged CI runs attach the same installer to the run's

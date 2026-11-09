@@ -97,7 +97,11 @@ try {
         -PackId $PackId -PackTitle $PackTitle -Channel $Channel -MainExe $MainExe
     if ($LASTEXITCODE -ne 0) { throw 'pack B failed' }
     $setup = @(Get-ChildItem -LiteralPath $releases -Filter '*-Setup.exe' -File)[0].FullName
-    $packageB = Join-Path $releases "$PackId-$VersionB-full.nupkg"
+    # Feed-resolved, never hardcoded: vpk infixes the channel in package names.
+    $feedB = Get-Content -LiteralPath (Join-Path $releases "releases.$Channel.json") -Raw | ConvertFrom-Json
+    $fullB = @($feedB.Assets | Where-Object { $_.Type -eq 'Full' -and $_.Version -eq $VersionB })
+    if ($fullB.Count -ne 1) { throw "Expected one Full asset for $VersionB, found $($fullB.Count)." }
+    $packageB = Join-Path $releases $fullB[0].FileName
     if (-not (Test-Path -LiteralPath $packageB -PathType Leaf)) { throw "Missing B package: $packageB" }
 
     # A marker outside the install root: install/apply must leave it alone.

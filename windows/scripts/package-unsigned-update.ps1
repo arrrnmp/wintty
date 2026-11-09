@@ -64,15 +64,20 @@ function Assert-PackageFile([string]$name) {
 
 $setups = @(Get-ChildItem -LiteralPath $OutputDir -Filter '*-Setup.exe' -File)
 if ($setups.Count -ne 1) { throw "Expected exactly one *-Setup.exe, found $($setups.Count)" }
-$fullName = "$PackId-$Version-full.nupkg"
-$fullPath = Assert-PackageFile $fullName
+
 $feedName = "releases.$Channel.json"
 $feedPath = Assert-PackageFile $feedName
-
 $feed = Get-Content -LiteralPath $feedPath -Raw | ConvertFrom-Json
 if ($null -eq $feed.Assets) { throw "$feedName has no Assets list" }
+# The feed is authoritative for file names: vpk infixes the channel
+# (arrrnmp.wintty.oss-stable-Setup.exe, *-stable-full.nupkg, ...), so a
+# hardcoded name would rot the moment the channel does. Resolve the Full
+# asset for -Version from the feed, then prove every listed file exists
+# with a matching size and hash.
 $full = @($feed.Assets | Where-Object { $_.Type -eq 'Full' -and $_.Version -eq $Version })
-if ($full.Count -lt 1) { throw "$feedName has no Full asset for $Version" }
+if ($full.Count -ne 1) { throw "$feedName has no unique Full asset for $Version (found $($full.Count))" }
+$fullName = $full[0].FileName
+$fullPath = Assert-PackageFile $fullName
 foreach ($asset in $feed.Assets) {
     $file = Join-Path $OutputDir $asset.FileName
     if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Feed lists missing file: $($asset.FileName)" }

@@ -261,14 +261,13 @@ jobs:
           $dir = 'artifacts/wintty-updates'
           $setups = @(Get-ChildItem -LiteralPath $dir -Filter '*-Setup.exe' -File)
           if ($setups.Count -ne 1) { throw "Refusing release: expected one *-Setup.exe, found $($setups.Count)." }
-          $full = Join-Path $dir "arrrnmp.wintty.oss-$version-full.nupkg"
-          if (-not (Test-Path -LiteralPath $full -PathType Leaf)) { throw "Refusing release: missing $([IO.Path]::GetFileName($full))." }
           $feed = Join-Path $dir 'releases.stable.json'
           if (-not (Test-Path -LiteralPath $feed -PathType Leaf)) { throw 'Refusing release: missing releases.stable.json.' }
+          # The feed names the files (vpk infixes the channel), so the Full
+          # package name is resolved from it, never hardcoded.
           $assets = (Get-Content -LiteralPath $feed -Raw | ConvertFrom-Json).Assets
-          if (@($assets | Where-Object { $_.Type -eq 'Full' -and $_.Version -eq $version }).Count -lt 1) {
-            throw "Refusing release: feed has no Full asset for $version."
-          }
+          $full = @($assets | Where-Object { $_.Type -eq 'Full' -and $_.Version -eq $version })
+          if ($full.Count -ne 1) { throw "Refusing release: feed has no unique Full asset for $version." }
           foreach ($a in $assets) {
             $file = Join-Path $dir $a.FileName
             if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Refusing release: feed lists missing $($a.FileName)." }
