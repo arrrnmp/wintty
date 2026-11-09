@@ -61,18 +61,6 @@ jobs:
       - name: Build baseline ReleaseFast libghostty
         run: zig build -Dapp-runtime=none -Doptimize=ReleaseFast -Dcpu=baseline
 
-      - name: Test core
-        run: dotnet test windows/Ghostty.Tests/Ghostty.Tests.csproj /p:Platform=x64 /p:RestoreLockedMode=true --blame-hang --blame-hang-timeout 5m
-
-      - name: Test Windows integration
-        run: dotnet test windows/Ghostty.Tests.Windows/Ghostty.Tests.Windows.csproj /p:Platform=x64 /p:RestoreLockedMode=true --blame-hang --blame-hang-timeout 5m
-
-      - name: Test icon generator
-        run: dotnet test dist/windows/IconGen.Tests/IconGen.Tests.csproj /p:RestoreLockedMode=true --blame-hang --blame-hang-timeout 5m
-
-      - name: Test splash generator
-        run: dotnet test dist/windows/SplashGen.Tests/SplashGen.Tests.csproj /p:RestoreLockedMode=true --blame-hang --blame-hang-timeout 5m
-
       # Release excludes the demo UI and command-capable test pipe. No
       # signing, private overlays, installer service, or update feed is used.
       - name: Publish unsigned self-contained NativeAOT app
@@ -105,6 +93,7 @@ jobs:
             "Run: https://github.com/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
             'Requires Windows 11 x64 and DirectX 12 feature level 12.0.'
             'Extract the entire archive, then run Wintty.exe. No automatic updates.'
+            'Tests are independent CI checks; an artifact does not mean every test passed.'
           ) | Set-Content (Join-Path $root 'BUILD.txt')
           Get-ChildItem $root -File -Recurse | Where-Object Name -ne 'SHA256SUMS.txt' | Sort-Object FullName | ForEach-Object {
             $relative = [IO.Path]::GetRelativePath($root, $_.FullName).Replace('\', '/')
@@ -118,3 +107,43 @@ jobs:
           path: artifacts/wintty-unsigned-win-x64/
           if-no-files-found: error
           retention-days: 3
+
+  tests:
+    if: github.repository == 'arrrnmp/wintty'
+    runs-on: windows-2025
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+
+      - name: Locate Visual Studio packaging tools
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products '*' -property installationPath
+          if ($LASTEXITCODE -ne 0 -or -not $vs) { throw 'Visual Studio not found' }
+          $pri = Get-Item "$vs\MSBuild\Microsoft\VisualStudio\v*\AppxPackage\Microsoft.Build.Packaging.Pri.Tasks.dll" |
+            Select-Object -First 1
+          if (-not $pri) { throw 'Visual Studio PRI packaging tasks not found' }
+          "AppxMSBuildToolsPath=$($pri.DirectoryName)\" >> $env:GITHUB_ENV
+
+      - name: Test core
+        run: dotnet test windows/Ghostty.Tests/Ghostty.Tests.csproj /p:Platform=x64 /p:RestoreLockedMode=true --blame-hang --blame-hang-timeout 5m
+
+      # Keep each failure visible and still run the remaining suites.
+      - name: Test Windows integration
+        if: ${{ !cancelled() }}
+        run: dotnet test windows/Ghostty.Tests.Windows/Ghostty.Tests.Windows.csproj /p:Platform=x64 /p:RestoreLockedMode=true --blame-hang --blame-hang-timeout 5m
+
+      - name: Test icon generator
+        if: ${{ !cancelled() }}
+        run: dotnet test dist/windows/IconGen.Tests/IconGen.Tests.csproj /p:RestoreLockedMode=true --blame-hang --blame-hang-timeout 5m
+
+      - name: Test splash generator
+        if: ${{ !cancelled() }}
+        run: dotnet test dist/windows/SplashGen.Tests/SplashGen.Tests.csproj /p:RestoreLockedMode=true --blame-hang --blame-hang-timeout 5m

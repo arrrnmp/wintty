@@ -7,7 +7,7 @@ distribution and is not signed by its publisher.
 ## Download and run
 
 Open this fork's [unsigned-windows workflow](https://github.com/arrrnmp/wintty/actions/workflows/unsigned-windows.yml),
-choose a successful run, and download its `wintty-unsigned-win-x64-<commit>`
+choose a run with a successful **build** job, and download its `wintty-unsigned-win-x64-<commit>`
 artifact. GitHub requires sign-in to download Actions artifacts. Extract the
 **entire** ZIP and launch `Wintty.exe`; keep its DLLs, assets, licenses, and
 resource directories alongside it. There is no installer or automatic updater.
@@ -49,12 +49,21 @@ exposes a command-capable harness pipe and must stay out of distributed builds.
 
 ## CI and costs
 
-The workflow runs on pushes and PRs to `windows`, and by manual dispatch. It uses
-one standard `windows-2025` runner, builds a baseline-CPU ReleaseFast native
-library, runs the four existing C# test suites, and publishes the Release x64
-self-contained NativeAOT app with locked NuGet dependencies. It uploads the
-complete publish tree with three-day retention. No signing secrets, private
-release checkout, or upstream release dispatch is needed.
+The workflow runs on pushes and PRs to `windows`, and by manual dispatch. Its
+**build** job uses a standard `windows-2025` runner, builds a baseline-CPU
+ReleaseFast native library, and publishes the Release x64 self-contained NativeAOT
+app with locked NuGet dependencies. It uploads the complete publish tree with
+three-day retention. An independent **tests** job runs all four existing C# test
+suites. Test failures remain failing CI checks, but do not block artifact creation.
+An available artifact does not mean every test passed; inspect both jobs before
+using it. No signing secrets, private release checkout, or upstream release
+dispatch is needed.
+
+The initial hosted core-test run passed 5,587 of 5,590 tests. Two pipe-ACL checks
+found the Administrators SID rather than the creating user SID on the elevated
+runner account; one toast-registration test expected an absent registry parent
+to be available. These failures are preserved, not skipped or weakened. The
+application and test source are unchanged by this build-pipeline work.
 
 The pinned translate-c dependency is prefetched through Codeberg's Git transport
 to avoid archive-generation timeouts. Its content hash must match the existing
