@@ -112,6 +112,7 @@ jobs:
         with:
           name: wintty-unsigned-win-x64-${{ github.sha }}
           path: artifacts/wintty-unsigned-win-x64/
+          include-hidden-files: true # Required shell-integration/zsh/.zshenv.
           if-no-files-found: error
           retention-days: 3
 
