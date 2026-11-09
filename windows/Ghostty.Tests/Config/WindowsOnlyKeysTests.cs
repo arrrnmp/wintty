@@ -34,6 +34,7 @@ public class WindowsOnlyKeysTests
     [InlineData("log-level")]
     [InlineData("log-filter")]
     [InlineData("hang-dump")]
+    [InlineData("windows-update-check")]
     public void Contains_KnownKey(string key)
     {
         Assert.True(WindowsOnlyKeys.Contains(key));
@@ -193,6 +194,7 @@ public class WindowsOnlyKeysTests
     [InlineData("log-level")]
     [InlineData("log-filter")]
     [InlineData("hang-dump")]
+    [InlineData("windows-update-check")]
     public void FileReadKeyDiagnostic_ExtractsKey_AndClassifiesAsWindowsOnly(string configKey)
     {
         // Shape of the precomputed diagnostic message (src/cli/diagnostics.zig

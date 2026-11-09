@@ -1,5 +1,6 @@
 > **arrrnmp/wintty fork:** unsigned OSS Windows builds are produced by our
-> [public CI](https://github.com/arrrnmp/wintty/actions/workflows/unsigned-windows.yml).
+> [public CI](https://github.com/arrrnmp/wintty/actions/workflows/unsigned-windows.yml):
+> a per-user installer with a stable auto-update feed plus the portable ZIP.
 > See [downloads, feature survey, and limitations](windows/docs/fork-builds.md).
 > The upstream distribution information below describes official builds, not ours.
 

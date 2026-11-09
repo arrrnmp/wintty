@@ -79,6 +79,8 @@ public static class WindowsOnlyKeys
             "Comma-separated CATEGORY=LEVEL pairs overriding log-level per component (longest matching category prefix wins). Malformed pairs and unknown levels are skipped silently."),
         new("hang-dump",
             "Capture scope of the hang watchdog's dump when the UI thread stalls: triage (default, stacks and locks only) or full (all process memory, which can include terminal output and secrets). Read live: a config reload re-applies it without a restart."),
+        new("windows-update-check",
+            "Check the stable GitHub feed for Wintty updates about once a day and offer to install them (true by default; set false to opt out). Read once when the check runs, so a change takes effect on the next launch."),
     ];
 
     public static readonly FrozenSet<string> Set =

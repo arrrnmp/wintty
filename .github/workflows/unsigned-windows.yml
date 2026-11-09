@@ -3,6 +3,7 @@ name: unsigned-windows
 on:
   push:
     branches: [windows]
+    tags: ["oss-v*"]
   pull_request:
     branches: [windows]
   workflow_dispatch: {}
@@ -63,6 +64,32 @@ jobs:
       - name: Restore locked project graphs
         run: dotnet restore windows/Ghostty.sln /p:Configuration=Release /p:Platform=x64 /p:RestoreLockedMode=true
 
+      # Tag builds ship the tag's semver; it takes precedence over any
+      # rehearsal version. Anything else gets 0.0.<run_number>: monotonic
+      # for feed ordering, strictly internal, never an official publish.
+      - name: Resolve update version
+        id: update-version
+        run: |
+          $ref = $env:GITHUB_REF
+          if ($ref -match '^refs/tags/oss-v(?<v>(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))$') {
+            $version = $Matches.v
+          } elseif ($ref -match '^refs/tags/') {
+            throw "Refusing to package tag ${ref}: release tags must be oss-vX.Y.Z (stable semver, never upstream v*/w*)."
+          } else {
+            $version = "0.0.$env:GITHUB_RUN_NUMBER"
+          }
+          $parts = $version.Split('.')
+          $next = "$($parts[0]).$($parts[1]).$([int]$parts[2] + 1)"
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "next=$next" >> $env:GITHUB_OUTPUT
+          "UPDATE_VERSION=$version" >> $env:GITHUB_ENV
+          "UPDATE_NEXT=$next" >> $env:GITHUB_ENV
+          Write-Host "update version: $version (smoke target: $next)"
+
+      # vpk 1.2.161, pinned in .config/dotnet-tools.json to match the app SDK.
+      - name: Restore pinned Velopack CLI
+        run: dotnet tool restore
+
       - name: Build baseline ReleaseFast libghostty
         run: zig build -Dapp-runtime=none -Doptimize=ReleaseFast -Dcpu=baseline
 
@@ -70,11 +97,18 @@ jobs:
       # signing, private overlays, installer service, or update feed is used.
       # PublishAot implies self-contained for the app; a global SelfContained
       # flag would also force the neutral IconGen tool into a RID build.
+      # Fork identity, baked into every CI build (portable and installer
+      # alike) so shell grouping, toasts, single-instance, and +version all
+      # agree: the OSS AUMID plus the resolved update version (tag semver on
+      # oss-vX.Y.Z, otherwise an internal 0.0.<run_number> rehearsal).
+      # Local dev builds keep the defaults by not passing these.
       - name: Publish unsigned self-contained NativeAOT app
         run: >-
           dotnet publish windows/Ghostty/Ghostty.csproj
           -c Release -r win-x64 --no-restore
           /p:Platform=x64 /p:RestoreLockedMode=true
+          /p:_WinttyAumId=io.github.arrrnmp.wintty.oss
+          /p:_WinttyVersion=$env:UPDATE_VERSION
           -o artifacts/wintty-unsigned-win-x64
 
       - name: Check portable payload and record provenance
@@ -99,7 +133,9 @@ jobs:
             "Commit: $env:GITHUB_SHA"
             "Run: https://github.com/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
             'Requires Windows 11 x64 and DirectX 12 feature level 12.0.'
-            'Extract the entire archive, then run Wintty.exe. No automatic updates.'
+            'Extract the entire archive, then run Wintty.exe.'
+            'Portable builds never check for updates; install the per-user Setup for automatic updates.'
+            "Update version: $env:UPDATE_VERSION (rehearsal unless built from an oss-vX.Y.Z tag)."
             'Tests are independent CI checks; an artifact does not mean every test passed.'
           ) | Set-Content (Join-Path $root 'BUILD.txt')
           Get-ChildItem $root -File -Recurse | Where-Object Name -ne 'SHA256SUMS.txt' | Sort-Object FullName | ForEach-Object {
@@ -115,6 +151,157 @@ jobs:
           include-hidden-files: true # Required shell-integration/zsh/.zshenv.
           if-no-files-found: error
           retention-days: 3
+
+      # Patch updates need the previous release locally so pack can emit a
+      # delta and merge the feed. Best effort: the first release has none
+      # (vpk download exits nonzero with no releases yet, and the pack
+      # below still produces a full package). Read-only and secret-free
+      # (public repo): PR builds never reach this (tag pushes only) and the
+      # job keeps contents: read.
+      - name: Download previous stable release
+        if: startsWith(github.ref, 'refs/tags/oss-v')
+        continue-on-error: true
+        run: >
+          dotnet vpk download github
+          --repoUrl https://github.com/arrrnmp/wintty
+          --channel stable
+          --outputDir artifacts/wintty-updates
+
+      # The SDK fast hooks must exit instead of launching the app: this is
+      # the explicit bootstrap proof for the wiring vpk pack 1.2.161 does
+      # not check itself. Headless-safe (no window, no GPU) and bounded:
+      # a hook that hangs instead of exiting fails here, not in an install.
+      - name: Probe Velopack fast hooks headless
+        run: |
+          foreach ($hook in @('--veloapp-install', '--veloapp-updated', '--veloapp-obsolete', '--veloapp-uninstall')) {
+            $p = Start-Process -FilePath 'artifacts/wintty-unsigned-win-x64/Wintty.exe' `
+              -ArgumentList @($hook, $env:UPDATE_VERSION) -PassThru -WindowStyle Hidden
+            if (-not $p.WaitForExit(60000)) {
+              try { Stop-Process -InputObject $p -Force } catch { }
+              throw "Hook probe '$hook' did not exit in 60s (killed pid $($p.Id))."
+            }
+            if ($p.ExitCode -ne 0) { throw "Hook probe '$hook' exited $($p.ExitCode), expected 0." }
+            Write-Host "hook ok: $hook exit=0"
+          }
+
+      # The published integration script must load under the same
+      # process-scoped RemoteSigned policy the app's own shell launch uses,
+      # and a browser-marked copy must refuse: documents the unsigned-ZIP
+      # trust story against the shipped file, with no persisted changes.
+      - name: Trust-test published PowerShell integration
+        run: >
+          pwsh -NoProfile -File windows/scripts/powershell-integration-trust-test.ps1
+          -SourceScript artifacts/wintty-unsigned-win-x64/share/ghostty/shell-integration/powershell/ghostty.ps1
+
+      # vpk 1.2.161 pack runs no in-pack bootstrap check of its own; the
+      # hook probes above are that proof. Pack validates only.
+      - name: Pack unsigned installer and update feed
+        run: |
+          windows/scripts/package-unsigned-update.ps1 `
+            -PublishDir artifacts/wintty-unsigned-win-x64 `
+            -OutputDir artifacts/wintty-updates `
+            -Version $env:UPDATE_VERSION
+
+      # Headless install A then real Update.exe apply of B, no GUI or GPU.
+      - name: Headless install/apply smoke (A->B)
+        run: |
+          windows/scripts/update-package-smoke.ps1 `
+            -PublishDir artifacts/wintty-unsigned-win-x64 `
+            -VersionA $env:UPDATE_VERSION `
+            -VersionB $env:UPDATE_NEXT
+
+      - name: Upload unsigned update packages
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wintty-update-packages-${{ github.sha }}
+          path: artifacts/wintty-updates/
+          if-no-files-found: error
+          retention-days: 3
+
+  # The ONLY job with release-write privilege. Runs solely on pushed
+  # oss-vX.Y.Z tags in this repo: never on PRs, pull_request_target, or
+  # workflow_run. Everything else in this workflow keeps contents: read.
+  release:
+    if: github.repository == 'arrrnmp/wintty' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/oss-v')
+    needs: [build]
+    runs-on: windows-2025
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: wintty-update-packages-${{ github.sha }}
+          path: artifacts/wintty-updates/
+
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+
+      # Fail closed: exact stable-semver tag, tag commit reachable from
+      # origin/windows, and every feed asset present with a matching hash.
+      # No upstream v*/w* tags ever qualify (the tag pattern rejects them).
+      - name: Validate tag and release assets
+        run: |
+          $tag = $env:GITHUB_REF -replace '^refs/tags/', ''
+          if ($tag -notmatch '^oss-v(?<v>(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))$') {
+            throw "Refusing release: tag '$tag' is not oss-vX.Y.Z stable semver."
+          }
+          $version = $Matches.v
+          git fetch --no-tags origin +windows:refs/remotes/origin/windows
+          if ($LASTEXITCODE -ne 0) { throw 'Could not fetch origin/windows for the reachability check.' }
+          git merge-base --is-ancestor $env:GITHUB_SHA origin/windows
+          if ($LASTEXITCODE -ne 0) { throw "Refusing release: tag commit $env:GITHUB_SHA is not reachable from origin/windows." }
+          $dir = 'artifacts/wintty-updates'
+          $setups = @(Get-ChildItem -LiteralPath $dir -Filter '*-Setup.exe' -File)
+          if ($setups.Count -ne 1) { throw "Refusing release: expected one *-Setup.exe, found $($setups.Count)." }
+          $full = Join-Path $dir "arrrnmp.wintty.oss-$version-full.nupkg"
+          if (-not (Test-Path -LiteralPath $full -PathType Leaf)) { throw "Refusing release: missing $([IO.Path]::GetFileName($full))." }
+          $feed = Join-Path $dir 'releases.stable.json'
+          if (-not (Test-Path -LiteralPath $feed -PathType Leaf)) { throw 'Refusing release: missing releases.stable.json.' }
+          $assets = (Get-Content -LiteralPath $feed -Raw | ConvertFrom-Json).Assets
+          if (@($assets | Where-Object { $_.Type -eq 'Full' -and $_.Version -eq $version }).Count -lt 1) {
+            throw "Refusing release: feed has no Full asset for $version."
+          }
+          foreach ($a in $assets) {
+            $file = Join-Path $dir $a.FileName
+            if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Refusing release: feed lists missing $($a.FileName)." }
+            $algo = if ($a.SHA256) { 'SHA256' } else { 'SHA1' }
+            $want = if ($a.SHA256) { $a.SHA256 } else { $a.SHA1 }
+            if ((Get-FileHash -LiteralPath $file -Algorithm $algo).Hash -ne $want.ToUpperInvariant()) {
+              throw "Refusing release: hash mismatch for $($a.FileName)."
+            }
+          }
+          Write-Host "release gate ok: $tag ($($assets.Count) feed assets)"
+
+      - name: Restore pinned Velopack CLI
+        run: dotnet tool restore
+
+      # Trusted code only: this step runs after the gate above, on the tag
+      # itself. The token is passed as an explicit flag from an env var
+      # (vpk 1.2.161 documents no token env binding, so an env-only
+      # handoff would upload anonymously); Actions masks the secret value
+      # in logs. --merge lets re-runs join an existing release instead of
+      # failing. No personal token anywhere: the workflow's own
+      # GITHUB_TOKEN, contents:write only in this job.
+      - name: Publish stable feed to GitHub Releases
+        env:
+          VPK_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >
+          dotnet vpk upload github
+          --repoUrl https://github.com/arrrnmp/wintty
+          --channel stable
+          --outputDir artifacts/wintty-updates
+          --tag $env:GITHUB_REF_NAME
+          --token $env:VPK_TOKEN
+          --merge
+          --publish
 
   tests:
     if: github.repository == 'arrrnmp/wintty'

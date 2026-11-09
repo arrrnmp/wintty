@@ -281,6 +281,22 @@
                       GeneratePathProperty="true"
                       ExcludeAssets="all"
                       Condition="'$(WinttyShipDxc)' != 'false'" />
+
+    <!--
+      Velopack auto-update client. Pinned to 1.2.161 (verified present and
+      the documented stable line). App-only on purpose: it is referenced
+      from this shell project alone, so it never propagates into
+      Ghostty.Core's or Ghostty.Tests' lock files. The net10.0 asset of
+      this version carries no package dependencies (netstandard2.0 and
+      net472 do, but those TFMs are not restored here), and the package
+      declares IsAotCompatible for net8.0+, so the NativeAOT publish the
+      installer ships stays supported. Only the SDK startup and
+      check/download/apply APIs verified against the 1.2.161 sources are
+      used; the exiting ApplyUpdatesAndRestart / ApplyUpdatesAndExit /
+      WaitExitThenApplyUpdates entry points are never called (see
+      Ghostty.Updates.UpdateHandoff).
+    -->
+    <PackageReference Include="Velopack" Version="1.2.161" />
   </ItemGroup>
 
   <!--
