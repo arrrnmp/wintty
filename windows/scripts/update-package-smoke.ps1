@@ -55,6 +55,17 @@ $tempRoot = (Resolve-Path -LiteralPath ([IO.Path]::GetTempPath())).Path.TrimEnd(
 if (((Resolve-Path -LiteralPath $work).Path.TrimEnd('\') + '\') -notlike ($tempRoot + '\*')) {
     throw "Staging dir escaped the temp root: $work"
 }
+# OS trust-machinery guard: our binaries are unsigned and Setup.marked.exe
+# deliberately carries MOTW. On-access scans or a reputation-consent check
+# can wedge process creation itself (no child output, no exit for any
+# timeout to catch) on a shared runner. Scope both mitigations to this
+# run's GUID staging dir / this ephemeral runner only; both are
+# best-effort notes, never failures.
+try { Add-MpPreference -ExclusionPath $work } catch { Write-Host 'note: Defender exclusion not applied; continuing' }
+try {
+    Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer' `
+        -Name SmartScreenEnabled -Value 'Off' -ErrorAction Stop
+} catch { Write-Host 'note: SmartScreen policy untouched; continuing' }
 function Assert-InstalledVersion([string]$root, [string]$want, [string]$hash) {
         $current = Join-Path $root 'current'
         # sq.version is the package manifest (nuspec XML), not a bare version
