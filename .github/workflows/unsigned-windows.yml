@@ -58,6 +58,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           if ($actual.Trim() -ne $expected) { throw "translate-c hash mismatch: $actual != $expected" }
 
+      # Restore the existing per-project graphs before selecting the app's
+      # publish RID; -r during restore also changes RID-agnostic tool locks.
+      - name: Restore locked project graphs
+        run: dotnet restore windows/Ghostty.sln /p:Configuration=Release /p:Platform=x64 /p:RestoreLockedMode=true
+
       - name: Build baseline ReleaseFast libghostty
         run: zig build -Dapp-runtime=none -Doptimize=ReleaseFast -Dcpu=baseline
 
@@ -66,7 +71,7 @@ jobs:
       - name: Publish unsigned self-contained NativeAOT app
         run: >-
           dotnet publish windows/Ghostty/Ghostty.csproj
-          -c Release -r win-x64 --self-contained true
+          -c Release -r win-x64 --self-contained true --no-restore
           /p:Platform=x64 /p:RestoreLockedMode=true
           -o artifacts/wintty-unsigned-win-x64
 
