@@ -68,10 +68,12 @@ jobs:
 
       # Release excludes the demo UI and command-capable test pipe. No
       # signing, private overlays, installer service, or update feed is used.
+      # PublishAot implies self-contained for the app; a global SelfContained
+      # flag would also force the neutral IconGen tool into a RID build.
       - name: Publish unsigned self-contained NativeAOT app
         run: >-
           dotnet publish windows/Ghostty/Ghostty.csproj
-          -c Release -r win-x64 --self-contained true --no-restore
+          -c Release -r win-x64 --no-restore
           /p:Platform=x64 /p:RestoreLockedMode=true
           -o artifacts/wintty-unsigned-win-x64
 
