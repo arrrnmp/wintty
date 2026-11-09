@@ -45,6 +45,19 @@ jobs:
           zig version
           dotnet --info
 
+      # Codeberg's archive generator can time out while Git remains healthy.
+      # Seed the same content-addressed package; keep the source pin untouched.
+      - name: Fetch pinned translate-c through Git
+        run: |
+          $manifest = Get-Content pkg/translate-c/build.zig.zon -Raw
+          $archive = [regex]::Match($manifest, '\.url\s*=\s*"https://codeberg\.org/([^"\s]+)/archive/([0-9a-f]{40})\.tar\.gz"')
+          $expected = [regex]::Match($manifest, '\.hash\s*=\s*"([^"]+)"').Groups[1].Value
+          if (-not $archive.Success -or -not $expected) { throw 'translate-c pin format changed; review Git prefetch' }
+          $url = 'git+https://codeberg.org/{0}.git#{1}' -f $archive.Groups[1].Value, $archive.Groups[2].Value
+          $actual = & zig fetch $url
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($actual.Trim() -ne $expected) { throw "translate-c hash mismatch: $actual != $expected" }
+
       - name: Build baseline ReleaseFast libghostty
         run: zig build -Dapp-runtime=none -Doptimize=ReleaseFast -Dcpu=baseline
 

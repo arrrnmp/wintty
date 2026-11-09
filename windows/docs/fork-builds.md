@@ -56,6 +56,10 @@ self-contained NativeAOT app with locked NuGet dependencies. It uploads the
 complete publish tree with three-day retention. No signing secrets, private
 release checkout, or upstream release dispatch is needed.
 
+The pinned translate-c dependency is prefetched through Codeberg's Git transport
+to avoid archive-generation timeouts. Its content hash must match the existing
+source manifest exactly; neither the dependency revision nor its hash is changed.
+
 Standard GitHub-hosted runner compute is free for public repositories, including
 Windows. This is not an unlimited-resource guarantee: hosted jobs have runtime
 and concurrency limits; larger runners are billed even for public repositories;
