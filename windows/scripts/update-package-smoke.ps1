@@ -55,6 +55,36 @@ $tempRoot = (Resolve-Path -LiteralPath ([IO.Path]::GetTempPath())).Path.TrimEnd(
 if (((Resolve-Path -LiteralPath $work).Path.TrimEnd('\') + '\') -notlike ($tempRoot + '\*')) {
     throw "Staging dir escaped the temp root: $work"
 }
+function Assert-InstalledVersion([string]$root, [string]$want, [string]$hash) {
+        $current = Join-Path $root 'current'
+        # sq.version is the package manifest (nuspec XML), not a bare version
+        # string: the installed version is its <version> element.
+        $sqRaw = Get-Content -LiteralPath (Join-Path $current 'sq.version') -Raw
+        if ($sqRaw -notmatch "<version>\s*$([regex]::Escape($want))\s*</version>") {
+            throw "sq.version manifest does not name version '$want'"
+        }
+        foreach ($f in @($MainExe, 'Wintty.pri', 'OpenConsole.dll',
+                "licenses/Wintty-LICENSE.txt", 'share/ghostty/shell-integration')) {
+            if (-not (Test-Path -LiteralPath (Join-Path $current $f))) { throw "Installed tree lacks: $f" }
+        }
+        # .pdb files stay out of installer/update packages by pack default;
+        # the ordinary portable artifact still carries symbols.
+        $ps1 = @(Get-ChildItem -LiteralPath $current -Recurse -Filter 'ghostty.ps1' -File)
+        if ($ps1.Count -ne 1) { throw "Expected one installed ghostty.ps1, found $($ps1.Count)" }
+        if ($motw -and (Get-Item -LiteralPath $ps1[0].FullName -Stream 'Zone.Identifier' -ErrorAction SilentlyContinue)) {
+            throw "Installed ghostty.ps1 carries Mark-of-the-Web from the marked Setup copy."
+        }
+        # RemoteSigned in a child process is the honest load test: an MOTW-
+        # marked script would refuse to load without a signature.
+        & pwsh -NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -Command `
+            ". '$($ps1[0].FullName)'; if (-not (Get-GhosttyPromptReport 'C:\smoke' 0)) { exit 1 }"
+        if ($LASTEXITCODE -ne 0) { throw 'Installed ghostty.ps1 does not load under RemoteSigned.' }
+        if ((Get-FileHash -LiteralPath $marker -Algorithm SHA256).Hash -ne $hash) {
+            throw 'Settings marker outside the install root changed.'
+        }
+        Write-Host "install tree ok: version=$want ghostty.ps1 loads, marker untouched"
+    }
+
 try {
     $exe = Join-Path $PublishDir $MainExe
     if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw "Main exe not found: $exe" }
@@ -146,35 +176,6 @@ try {
     Write-Host "smoke ok: install $VersionA -> apply $VersionB, hooks fast, no GUI, marker untouched"
 }
 
-function Assert-InstalledVersion([string]$root, [string]$want, [string]$hash) {
-        $current = Join-Path $root 'current'
-        # sq.version is the package manifest (nuspec XML), not a bare version
-        # string: the installed version is its <version> element.
-        $sqRaw = Get-Content -LiteralPath (Join-Path $current 'sq.version') -Raw
-        if ($sqRaw -notmatch "<version>\s*$([regex]::Escape($want))\s*</version>") {
-            throw "sq.version manifest does not name version '$want'"
-        }
-        foreach ($f in @($MainExe, 'Wintty.pri', 'OpenConsole.dll',
-                "licenses/Wintty-LICENSE.txt", 'share/ghostty/shell-integration')) {
-            if (-not (Test-Path -LiteralPath (Join-Path $current $f))) { throw "Installed tree lacks: $f" }
-        }
-        # .pdb files stay out of installer/update packages by pack default;
-        # the ordinary portable artifact still carries symbols.
-        $ps1 = @(Get-ChildItem -LiteralPath $current -Recurse -Filter 'ghostty.ps1' -File)
-        if ($ps1.Count -ne 1) { throw "Expected one installed ghostty.ps1, found $($ps1.Count)" }
-        if ($motw -and (Get-Item -LiteralPath $ps1[0].FullName -Stream 'Zone.Identifier' -ErrorAction SilentlyContinue)) {
-            throw "Installed ghostty.ps1 carries Mark-of-the-Web from the marked Setup copy."
-        }
-        # RemoteSigned in a child process is the honest load test: an MOTW-
-        # marked script would refuse to load without a signature.
-        & pwsh -NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -Command `
-            ". '$($ps1[0].FullName)'; if (-not (Get-GhosttyPromptReport 'C:\smoke' 0)) { exit 1 }"
-        if ($LASTEXITCODE -ne 0) { throw 'Installed ghostty.ps1 does not load under RemoteSigned.' }
-        if ((Get-FileHash -LiteralPath $marker -Algorithm SHA256).Hash -ne $hash) {
-            throw 'Settings marker outside the install root changed.'
-        }
-        Write-Host "install tree ok: version=$want ghostty.ps1 loads, marker untouched"
-    }
 finally {
     # Only what this run staged: uninstall our temp install (drops its own
     # shortcuts), then remove the GUID workdir. Nothing else is touched.
