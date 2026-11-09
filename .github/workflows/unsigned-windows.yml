@@ -1,0 +1,107 @@
+name: unsigned-windows
+
+on:
+  push:
+    branches: [windows]
+  pull_request:
+    branches: [windows]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    if: github.repository == 'arrrnmp/wintty'
+    runs-on: windows-2025
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+
+      # The app's local-machine fallbacks do not include VS Enterprise,
+      # which is the edition installed on GitHub's standard Windows image.
+      - name: Locate Visual Studio packaging tools
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products '*' -property installationPath
+          if ($LASTEXITCODE -ne 0 -or -not $vs) { throw 'Visual Studio not found' }
+          $pri = Get-Item "$vs\MSBuild\Microsoft\VisualStudio\v*\AppxPackage\Microsoft.Build.Packaging.Pri.Tasks.dll" |
+            Select-Object -First 1
+          if (-not $pri) { throw 'Visual Studio PRI packaging tasks not found' }
+          "AppxMSBuildToolsPath=$($pri.DirectoryName)\" >> $env:GITHUB_ENV
+          zig version
+          dotnet --info
+
+      - name: Build baseline ReleaseFast libghostty
+        run: zig build -Dapp-runtime=none -Doptimize=ReleaseFast -Dcpu=baseline
+
+      - name: Test core
+        run: dotnet test windows/Ghostty.Tests/Ghostty.Tests.csproj /p:Platform=x64 /p:RestoreLockedMode=true --blame-hang --blame-hang-timeout 5m
+
+      - name: Test Windows integration
+        run: dotnet test windows/Ghostty.Tests.Windows/Ghostty.Tests.Windows.csproj /p:Platform=x64 /p:RestoreLockedMode=true --blame-hang --blame-hang-timeout 5m
+
+      - name: Test icon generator
+        run: dotnet test dist/windows/IconGen.Tests/IconGen.Tests.csproj /p:RestoreLockedMode=true --blame-hang --blame-hang-timeout 5m
+
+      - name: Test splash generator
+        run: dotnet test dist/windows/SplashGen.Tests/SplashGen.Tests.csproj /p:RestoreLockedMode=true --blame-hang --blame-hang-timeout 5m
+
+      # Release excludes the demo UI and command-capable test pipe. No
+      # signing, private overlays, installer service, or update feed is used.
+      - name: Publish unsigned self-contained NativeAOT app
+        run: >-
+          dotnet publish windows/Ghostty/Ghostty.csproj
+          -c Release -r win-x64 --self-contained true
+          /p:Platform=x64 /p:RestoreLockedMode=true
+          -o artifacts/wintty-unsigned-win-x64
+
+      - name: Check portable payload and record provenance
+        run: |
+          $root = Join-Path $PWD 'artifacts/wintty-unsigned-win-x64'
+          foreach ($file in @('Wintty.exe', 'Wintty.pri', 'bin/wintty.exe',
+              'conpty.dll', 'OpenConsole.exe', 'dxcompiler.dll',
+              'Microsoft.WindowsAppRuntime.Insights.Resource.dll',
+              'licenses/Wintty-LICENSE.txt', 'share/terminfo/ghostty.terminfo')) {
+            if (-not (Test-Path (Join-Path $root $file) -PathType Leaf)) {
+              throw "Missing portable payload: $file"
+            }
+          }
+          foreach ($dir in @('Assets', 'share/ghostty/themes', 'share/ghostty/shell-integration')) {
+            if (-not (Test-Path (Join-Path $root $dir) -PathType Container)) {
+              throw "Missing portable resources: $dir"
+            }
+          }
+          Copy-Item LICENSE (Join-Path $root 'LICENSE')
+          @(
+            'Unofficial unsigned OSS build from arrrnmp/wintty.'
+            "Commit: $env:GITHUB_SHA"
+            "Run: https://github.com/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+            'Requires Windows 11 x64 and DirectX 12 feature level 12.0.'
+            'Extract the entire archive, then run Wintty.exe. No automatic updates.'
+          ) | Set-Content (Join-Path $root 'BUILD.txt')
+          Get-ChildItem $root -File -Recurse | Where-Object Name -ne 'SHA256SUMS.txt' | Sort-Object FullName | ForEach-Object {
+            $relative = [IO.Path]::GetRelativePath($root, $_.FullName).Replace('\', '/')
+            '{0}  {1}' -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $relative
+          } | Set-Content (Join-Path $root 'SHA256SUMS.txt')
+
+      - name: Upload complete unsigned portable app
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wintty-unsigned-win-x64-${{ github.sha }}
+          path: artifacts/wintty-unsigned-win-x64/
+          if-no-files-found: error
+          retention-days: 3

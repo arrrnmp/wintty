@@ -42,42 +42,19 @@ These apply to anything aimed at upstream `ghostty-org/ghostty`:
 
 ### This fork
 
-The rules above are upstream's. They do not describe how work lands here.
+This checkout is `arrrnmp/wintty`. Keep this file specific to our fork
+when syncing upstream; do not replace it with upstream's workflow rules.
 
-Issues and PRs against `deblasis/wintty` are the normal, required workflow:
-branch from `windows`, push the branch, open a PR with `--repo
-deblasis/wintty`, get it reviewed, run `just signoff` green against the
-exact head sha, and merge through `just merge-checked <pr>` by default.
-Push before the signoff: the ladder records against the exact head sha and
-also advertises it as a GitHub status, which can only land once the commit
-exists on GitHub. If the order ever inverts anyway, `just signoff-post
-<sha>` re-advertises the recorded run without re-running anything. A raw
-`gh pr merge` is tolerated only for a provably same-window merge, and your
-view of `windows` is only as fresh as your last fetch. The `pr_gate` hook refuses
-a merge without that signoff, and both the hook and the guard refuse a
-merge whose signoff window has moved (commits landed on `windows` after
-the record's base): the green vouches for an older `windows`, so rebase
-onto the current one, run `just signoff` again, and merge. That second
-run is cheap by design: a leg whose inputs the rebase did not move
-carries its earlier green in seconds (`just leg-cache plan` shows which),
-so a rebase costs a signoff of about a minute, never the ladder. Merging
-on the old green and filing the risk as a `resignoff-required` issue is
-no longer the default; it is the owner's override, `just merge-checked
-<pr> --carry-risk`, and an agent does not reach for it. The one
-deliberate exception is an upstream sync, which lands a merge of
-`upstream/main` into `windows` without a PR; in exchange the merge tree
-runs the full gate ladder before the push, and the conflict resolution
-is held to the same standard a PR review would demand: no fork behavior
-silently dropped, and no upstream change landed unaccounted for.
+All branches, pushes, issues, PRs, CI runs, and release artifacts for this
+fork belong to `arrrnmp/wintty`. Always pass `--repo arrrnmp/wintty` to
+GitHub CLI commands that accept it. Never publish changes or open issues
+or PRs against `deblasis/wintty` or `ghostty-org/ghostty`.
 
-The `resignoff-required` issues that exist are debt, not blockers: they
-are designed to sit until worked, and working them is the owner's loop
-(`just resignoff-bot`), not an agent's merge step. Never run the bot as
-part of merging; each run is an hour of lane time and the pile is meant
-to wait for it.
-
-Always pass `--repo deblasis/wintty`. Never open anything against
-`ghostty-org/ghostty`.
+Branch from `windows` for changes. Do not commit, push, open a PR, or merge
+unless the user requests it. The upstream private release pipeline and
+its local signoff/merge automation are not this fork's publishing workflow.
+Use this fork's public CI for unsigned builds; never require upstream
+signing credentials or private release repositories.
 
 ## Heavy job lanes (mandatory on the development machine)
 

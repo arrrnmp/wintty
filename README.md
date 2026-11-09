@@ -1,3 +1,8 @@
+> **arrrnmp/wintty fork:** unsigned OSS Windows builds are produced by our
+> [public CI](https://github.com/arrrnmp/wintty/actions/workflows/unsigned-windows.yml).
+> See [downloads, feature survey, and limitations](windows/docs/fork-builds.md).
+> The upstream distribution information below describes official builds, not ours.
+
 <!-- LOGO -->
 <h1 align="center">
   <img src="https://github.com/user-attachments/assets/eed9e6f8-dfc5-4e29-b3bb-53ca39cf6aeb" alt="Wintty logo" width="128" />
