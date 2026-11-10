@@ -86,9 +86,11 @@ updater beside the binary.
 The updater manages only files inside its own per-user install root; user
 settings live outside it and survive updates. The first install from the
 Setup is per-user with no elevation. Installed scripts ship with no
-Mark-of-the-Web, so they load under RemoteSigned; a browser-marked Setup
-download does not propagate the mark into the installed tree (the CI smoke
-test proves this on every build).
+Mark-of-the-Web, so they load under RemoteSigned: the payload comes from
+the Setup's embedded zip, which carries no alternate streams, and the
+smoke test verifies the installed script has no stamp and loads under
+RemoteSigned on every build — while the trust test proves a stamped copy
+refuses under the same policy.
 
 Unsigned builds stay unsigned all the way down: no signing flags, no MSI,
 no private overlays. Binaries may trip Defender SmartScreen warnings;

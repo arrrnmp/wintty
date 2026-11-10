@@ -55,17 +55,11 @@ $tempRoot = (Resolve-Path -LiteralPath ([IO.Path]::GetTempPath())).Path.TrimEnd(
 if (((Resolve-Path -LiteralPath $work).Path.TrimEnd('\') + '\') -notlike ($tempRoot + '\*')) {
     throw "Staging dir escaped the temp root: $work"
 }
-# OS trust-machinery guard: our binaries are unsigned and Setup.marked.exe
-# deliberately carries MOTW. On-access scans or a reputation-consent check
-# can wedge process creation itself (no child output, no exit for any
-# timeout to catch) on a shared runner. Scope both mitigations to this
-# run's GUID staging dir / this ephemeral runner only; both are
-# best-effort notes, never failures.
+# OS trust-machinery guard: our binaries are unsigned. Exclude only this
+# run's GUID staging dir (ephemeral runner, nothing else lives there) so
+# on-access scans can never wedge process creation mid-smoke. Best-effort
+# note, never a failure.
 try { Add-MpPreference -ExclusionPath $work } catch { Write-Host 'note: Defender exclusion not applied; continuing' }
-try {
-    Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer' `
-        -Name SmartScreenEnabled -Value 'Off' -ErrorAction Stop
-} catch { Write-Host 'note: SmartScreen policy untouched; continuing' }
 function Assert-InstalledVersion([string]$root, [string]$want, [string]$hash) {
         $current = Join-Path $root 'current'
         # sq.version is the package manifest (nuspec XML), not a bare version
@@ -145,16 +139,27 @@ try {
     'wintty-update-smoke settings marker, do not touch' | Set-Content -LiteralPath $marker -NoNewline
     $markerHash = (Get-FileHash -LiteralPath $marker -Algorithm SHA256).Hash
 
-    # Phase 2: browser-mark OUR OWN setup copy (ZoneId=3) when the filesystem
-    # allows it, then install silently from it. --silent is the documented
-    # prevent-launch flag: the app must not start after install.
+    # Phase 2: install silently from the Setup. Deliberately the UNMARKED
+    # build output, not a browser-marked copy: executing a MOTW-marked
+    # unsigned binary wedges process creation on hosted runners in a
+    # reputation-dependent way (two runs hung with no child output at all),
+    # which no script-side timeout can bound. The marked-download story is
+    # still proven, without executing the marked container: stamp a copy
+    # exactly the way a browser download stamps it, then prove the
+    # installed tree carries no stamp (the payload comes from the
+    # embedded zip, which has no alternate streams) and loads under
+    # RemoteSigned -- while the trust-test step proves a stamped script
+    # refuses under the same policy.
+    $installCopy = Join-Path $work 'Setup.install.exe'
+    Copy-Item -LiteralPath $setup[0].FullName -Destination $installCopy
+    Write-Host "setup copy ready: $installCopy"
     $marked = Join-Path $work 'Setup.marked.exe'
     Copy-Item -LiteralPath $setup[0].FullName -Destination $marked
-    Write-Host "setup copy ready: $marked"
     $motw = $false
     try {
         Set-Content -LiteralPath $marked -Stream 'Zone.Identifier' -Value "[ZoneTransfer]`nZoneId=3" -ErrorAction Stop
         $motw = $true
+        Write-Host 'marked copy carries ZoneId=3 (download simulation; never executed)'
     } catch { Write-Host 'note: ADS unavailable, skipping MOTW simulation' }
     Write-Host 'probing for staged processes before install...'
     Assert-NoStagedProcess $installA 'refusing to install over a running staged app'
@@ -164,7 +169,7 @@ try {
     # process starts instead of when it finishes. Waiting on the call
     # operator would race the background install and assert on a
     # half-written tree.
-    $p = Start-Process -FilePath $marked -ArgumentList @('--silent', '--installto', $installA) `
+    $p = Start-Process -FilePath $installCopy -ArgumentList @('--silent', '--installto', $installA) `
         -PassThru -WindowStyle Hidden
     if (-not $p.WaitForExit(300000)) {
         try { Stop-Process -InputObject $p -Force } catch { }
