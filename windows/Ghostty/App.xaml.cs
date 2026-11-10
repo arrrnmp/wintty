@@ -87,6 +87,12 @@ public partial class App : Application
     private Ghostty.Services.ThemePreviewService? _themePreview;
 
     private Ghostty.Session.SessionManager? _sessionManager;
+    // Once-per-launch background update check and its cancellation. Built
+    // at the end of OnLaunched, cancelled in the last window's teardown so
+    // no notice lands on a dying window tree and no download outlives the
+    // process it would restart.
+    private Ghostty.Updates.UpdateService? _updateService;
+    private System.Threading.CancellationTokenSource? _updateServiceCts;
     private Ghostty.Hosting.WindowsGlobalHotKey? _quakeHotKey;
     private Ghostty.Hosting.WindowsSystemMenuHook? _systemMenuHook;
     private Ghostty.Shell.TrayIconService? _trayIconService;
@@ -1326,6 +1332,64 @@ public partial class App : Application
         // acted on. Anything arriving from here is a person clicking a new
         // toast, so it must be delivered even when it names the same surface.
         ToastActivations.CloseLaunchWindow();
+
+        // Update check, once per launch, after the GUI is ready: the first
+        // windows exist and notice hosts are bound, so a downloaded update
+        // can surface as a sticky notice. Fire-and-forget on a threadpool
+        // thread; the service owns its cancellation and every failure is
+        // log-only, so this never blocks or breaks startup.
+        StartUpdateCheck();
+    }
+
+    /// <summary>
+    /// Start the once-per-launch background update check. Best effort:
+    /// anything missing (no config service, no notice queue, no logger,
+    /// no writable state dir) or refused (explicit opt-out) skips the
+    /// check rather than failing startup.
+    /// </summary>
+    private void StartUpdateCheck()
+    {
+        try
+        {
+            if (_configService is null || _notificationService is null || _loggerFactory is null)
+                return;
+
+            // Explicit opt-out, enabled by default. Read through the same
+            // raw/ParseBool pattern as the other Windows-only keys (see
+            // windows-single-instance): only a literal false disables it.
+            if (!Ghostty.Core.Config.WindowsOnlyKeyParsers.ParseBool(
+                    _configService.GetRawFileValue(Ghostty.Core.Updates.UpdatePolicy.ConfigKey),
+                    defaultValue: true))
+            {
+                return;
+            }
+
+            // The throttle timestamp lives under the existing per-user
+            // state root (no custom config root): without a resolvable one
+            // there is nowhere to throttle against, so skip rather than
+            // check on every launch.
+            if (string.IsNullOrEmpty(Ghostty.Core.AppStateBase.LocalRoot))
+                return;
+            var stateDir = Path.Combine(
+                Ghostty.Core.AppStateBase.LocalRoot, Ghostty.Core.AppIdentity.StateDirName);
+
+            _updateServiceCts = new System.Threading.CancellationTokenSource();
+            _updateService = new Ghostty.Updates.UpdateService(
+                _loggerFactory.CreateLogger<Ghostty.Updates.UpdateService>(),
+                DispatcherQueue.GetForCurrentThread(),
+                _notificationService,
+                () => _configService?.GetRawFileValue(Ghostty.Core.Updates.UpdatePolicy.ConfigKey),
+                stateDir,
+                CloseAllWindows,
+                () => AllWindows.Any());
+            _updateService.StartOnce(_updateServiceCts.Token);
+        }
+        catch (Exception ex)
+        {
+            // Best effort by contract: the check must never break startup.
+            Program.WriteStartupDiagnostic(
+                $"update check not started: {ex.GetType().Name}: {ex.Message}");
+        }
     }
 
     /// <summary>
@@ -2570,6 +2634,17 @@ public partial class App : Application
         {
             try
             {
+                // Cancel the background update check first: it must not pop
+                // a notice onto a window tree that is going away, and a
+                // download must not outlive the process it would restart.
+                // Cancellation is silent by the service's contract; an
+                // approval already recorded stays pending for the handoff
+                // in Program.Main after this teardown completes.
+                try { _updateServiceCts?.Cancel(); } catch { /* best effort */ }
+                _updateServiceCts?.Dispose();
+                _updateServiceCts = null;
+                _updateService = null;
+
                 // Final clean-shutdown write while the closing window's panes
                 // are still alive (teardown happens below). Marks the session
                 // clean so window-save-state=default restores it next launch.

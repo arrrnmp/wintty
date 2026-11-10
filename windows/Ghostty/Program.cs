@@ -9,6 +9,7 @@ using Ghostty.Core.Logging;
 using Ghostty.Core.SingleInstance;
 using Ghostty.Core.Version;
 using Ghostty.Interop;
+using Ghostty.Updates;
 
 namespace Ghostty;
 
@@ -478,6 +479,13 @@ public static partial class Program
     [STAThread]
     static int Main(string[] args)
     {
+        // First, before everything: the Velopack SDK startup hooks. These
+        // inspect the raw command line for the SDK's own --veloapp-*
+        // callbacks (install/update/obsolete/uninstall), which exit the
+        // process before our thread, native init, election, or GUI may see
+        // them. See VelopackBootstrap for the verified SDK contract.
+        VelopackBootstrap.RunStartupHooks();
+
         // Everything below eventually calls into libghostty, and a
         // Debug-optimized build uses far more stack per call than a release
         // one. Both entry paths need the headroom: CLI actions call
@@ -514,6 +522,10 @@ public static partial class Program
             {
                 try
                 {
+                    // Before MainImpl (native resolver, GUI, election):
+                    // refuse to start over a live update apply. SDK hooks
+                    // above already exited, so this never blocks them.
+                    UpdateLaunchGuard.CheckApplyMarkerAndExitIfApplying();
                     exitCode = MainImpl(args);
                 }
                 catch (Exception ex)
@@ -525,6 +537,16 @@ public static partial class Program
         main.SetApartmentState(ApartmentState.STA);
         main.Start();
         main.Join();
+
+        // The UI thread has joined and teardown is complete. A pending
+        // update approval (recorded by the update-ready notice's action)
+        // hands off to Update.exe here and only here: Update.exe waits on
+        // our pid and then force-stops images under the install root, so
+        // nothing belonging to this process may still be alive. Gated on a
+        // clean shutdown; a crash never applies.
+        if (exitCode == 0)
+            UpdateHandoff.PerformHandoffIfRequested();
+
         return exitCode;
     }
 

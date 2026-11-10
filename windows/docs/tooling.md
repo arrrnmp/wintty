@@ -14,7 +14,11 @@ with upstream. Run `just --list` to see them all.
 
 ## How CI works
 
-There is no automated CI pipeline. GitHub Actions is disabled.
+This fork uses the [unsigned-windows workflow](../../.github/workflows/unsigned-windows.yml)
+for public Windows builds and the four C# test suites. It runs on pushes and PRs
+to `windows`, and by manual dispatch. Download and build details are in
+[Unsigned builds](fork-builds.md). Inherited upstream workflows are not this
+fork's release pipeline.
 
 This is a solo passion project developed on a cross-platform homelab - Windows, macOS,
 and Linux machines are all available. The primary development loop happens on Windows
@@ -42,11 +46,12 @@ It's skipped for Windows-only changes like C# code.
 Upstream keeps Linux and macOS CI healthy. Since the fork rebases daily, any
 cross-platform regression from upstream gets caught during the next sync.
 
-## Why not GitHub Actions
+## GitHub Actions costs
 
-GitHub's free tier gives 2,000 minutes/month, but Windows runners consume minutes
-at 2x rate. A single full test run can burn through a meaningful chunk of that budget.
-Running locally on real hardware costs nothing and gives faster feedback.
+Standard GitHub-hosted runner compute is free for public repositories, including
+Windows; private-repository included-compute budgets do not apply here. Larger
+runners are billed, and runtime, concurrency, artifact-storage, and cache limits
+still apply. See [GitHub's billing documentation](https://docs.github.com/en/billing/concepts/product-billing/github-actions).
 
-If the project grows beyond solo development, CI can be added back - the `justfile`
-recipes define exactly what a pipeline would run.
+Local Windows hardware is still needed for GPU/desktop harness verification;
+the hosted build is not a GUI smoke test.
